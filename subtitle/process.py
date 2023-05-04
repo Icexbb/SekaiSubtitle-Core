@@ -6,7 +6,7 @@ import re
 import time
 from concurrent import futures
 from datetime import timedelta
-from queue import Queue
+import hashlib
 
 import cv2
 import numpy as np
@@ -37,29 +37,27 @@ class ProcessConfig(BaseModel):
 class SekaiJsonVideoProcess:
     def __init__(
             self,
-            data: ProcessConfig,
-            # signal: QtCore.Signal(dict) = None,
-            # queue_in: Queue = Queue(),
+            config: ProcessConfig,
     ):
         self.processing = False
         self.stop = False
 
         self.json_data = None
-        self.data = data
-        self.video_file = data.video_file
-        self.json_file = data.json_file
-        self.translate_file = data.translate_file
+        self.config = config
+        self.video_file = self.config.video_file
+        self.json_file = self.config.json_file
+        self.translate_file = self.config.translate_file
 
         self.time_start = time.time()
-        self.id = str(hash(self.video_file + str(self.time_start)))
+        self.id = hashlib.md5(f"{self.video_file}_{self.time_start}".encode('utf8')).hexdigest()
 
-        self.overwrite = data.overwrite
-        self.font = data.font
-        self.dryrun = data.dryrun
-        self.staff = data.staff
-        self.typer_interval = data.typer_interval
-        self.duration = data.duration
-        self.debug = data.debug
+        self.overwrite = self.config.overwrite
+        self.font = self.config.font
+        self.dryrun = self.config.dryrun
+        self.staff = self.config.staff
+        self.typer_interval = self.config.typer_interval
+        self.duration = self.config.duration
+        self.debug = self.config.debug
         self.output_path = os.path.realpath(os.path.splitext(self.video_file)[0] + ".ass")
 
         self.message_queue = []  # Queue()
@@ -123,7 +121,7 @@ class SekaiJsonVideoProcess:
 
     @property
     def process_progress(self) -> float:
-        return round(self.frame_processed / self.frame_process_total, 2) if self.frame_process_total else 0
+        return round(self.frame_processed / self.frame_process_total, 4) if self.frame_process_total else 0
 
     def set_stop(self):
         self.stop = True
@@ -135,7 +133,6 @@ class SekaiJsonVideoProcess:
             return
         m = f"[{msg_type.capitalize()}] {msg.strip() if isinstance(msg, str) else msg.__repr__()}"
         self.emit(m)
-        print(m)
 
     def emit(self, data):
         self.message_queue.append({"type": data.__class__.__name__, "data": data})
@@ -431,13 +428,13 @@ class SekaiJsonVideoProcess:
                                         if self.dryrun:
                                             self.log(
                                                 "process", f"Dialog {dialog_processed}: Output {len(events)} Events")
-                                            self.log("警告", f"No Data For This Dialog, Please Recheck")
+                                            self.log("warning", f"No Data For This Dialog, Please Recheck")
                                         else:
                                             self.log(
                                                 "process", f"Dialog {dialog_processed}: Output {len(events)} Events")
                                             if len(events) > 2:
                                                 self.log(
-                                                    "警告", f"Jitter Happened in a No-Json Task, Please Recheck")
+                                                    "warning", f"Jitter Happened in a No-Json Task, Please Recheck")
 
                                     dialog_last_end_frame = dialog_processing_frames[-1]
                                     dialog_last_end_event = events[-1]
@@ -534,9 +531,13 @@ class SekaiJsonVideoProcess:
                                     except IndexError:
                                         tag_data_processing = None
                                 tag_last_result = tag_frame_result
-            self.emit({"done": 1, "time": time.time() - self.time_start})
             now_frame_count += 1
             self.frame_processed += 1
+            self.emit({
+                "frame": now_frame_count,
+                "time": round(time.time() - self.time_start, 3),
+                "progress": self.process_progress
+            })
 
             if now_frame_count > total_frame_count:
                 break
@@ -818,6 +819,7 @@ class SekaiJsonVideoProcess:
 
     def run(self):
         self.processing = True
+        self.stop = False
         try:
             self.time_start = time.time()
             self.log("process", f"Start Processing {os.path.split(self.video_file)[-1]}")
@@ -870,10 +872,7 @@ class SekaiJsonVideoProcess:
                 fp.write(subtitle.string)
 
             self.log("success", f"File Exported to {os.path.realpath(self.output_path)} Successfully")
-            self.emit({"done": 1, "end": True, "time": time.time() - self.time_start})
+            self.emit({"end": True, "time": time.time() - self.time_start})
         finally:
             self.VideoCapture.release()
             self.processing = False
-
-    async def async_run(self):
-        self.run()
