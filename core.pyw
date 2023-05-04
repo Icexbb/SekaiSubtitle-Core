@@ -48,6 +48,21 @@ class App(FastAPI):
 
 app = App()
 
+from fastapi.middleware.cors import CORSMiddleware
+
+
+origins = [
+    "http://localhost",
+    "http://localhost:5173",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.post("/new")
 async def create_task(config: ProcessConfig, runAfterCreate: bool = False):
@@ -131,13 +146,21 @@ async def task_list(running: bool = False):
     return {'success': True, "data": data}
 
 
-@app.get("/taskStatus")
+# @app.get("/taskStatus")
 async def task_status():
     data = {
         task_id: 'processing' if app.get_task(task_id).processing else "idle"
         for task_id in app.TaskList.keys()
     }
     return {'success': True, "data": data}
+
+
+@app.get("/taskConfig/{task_id}")
+async def task_config(task_id):
+    if task := app.get_task(task_id):
+        return {'success': True, "data": task.config.dict()}
+    else:
+        raise HTTPException(400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
 
 
 @app.websocket('/status/{task_id}')

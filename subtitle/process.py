@@ -121,7 +121,7 @@ class SekaiJsonVideoProcess:
 
     @property
     def process_progress(self) -> float:
-        return round(self.frame_processed / self.frame_process_total, 4) if self.frame_process_total else 0
+        return round((self.frame_processed / self.frame_process_total if self.frame_process_total else 0) * 100, 2)
 
     def set_stop(self):
         self.stop = True
