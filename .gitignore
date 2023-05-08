@@ -1,6 +1,7 @@
 *.exe
 *.cmd
 *.sh
+!pack.*
 temp.*
 test.*
 *.upx
