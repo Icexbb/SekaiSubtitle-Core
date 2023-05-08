@@ -7,7 +7,7 @@ from typing import Union
 import ass
 from ass.data import Color
 
-from subtitle.tools import timedelta_to_string
+from lib.tools import timedelta_to_string
 
 
 class Subtitle:

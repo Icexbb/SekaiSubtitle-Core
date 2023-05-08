@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from subtitle.subtitle import AssDraw
+from lib.subtitle import AssDraw
 
 
 def get_area_mask_size(frame_shape: tuple):
@@ -118,7 +118,7 @@ def get_area_tag_mask(frame_height: int, frame_width: int, move: tuple[int, int]
                   "b 787 85 770 65 749 64"
     mask = AssDraw(origin_mask)
     mask.move([-420, -101])
-    from subtitle.match import __scaling_ratio
+    from lib.match import __scaling_ratio
     mask.scale(1 / __scaling_ratio(1600, 2560))
     mask.move([-275, 0])
     mask.scale(__scaling_ratio(frame_height, frame_width)*0.99)

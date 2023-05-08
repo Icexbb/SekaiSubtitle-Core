@@ -1,12 +1,17 @@
-import os
-from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import json
+import os
 from threading import Thread
+from typing import Literal
+
+import cv2
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, WebSocketException
-from subtitle.process import SekaiJsonVideoProcess, ProcessConfig
-import cv2
+from fastapi.middleware.cors import CORSMiddleware
+
+from lib import tools
+from lib.download import download_list, download_file
+from lib.process import SekaiJsonVideoProcess, ProcessConfig
 
 
 class App(FastAPI):
@@ -51,7 +56,6 @@ class App(FastAPI):
 
 app = App()
 
-
 origins = [
     "http://localhost",
     "http://localhost:5173",
@@ -68,9 +72,9 @@ app.add_middleware(
 
 @app.post("/new")
 async def create_task(
-    config: ProcessConfig,
-    # payload: dict = Body(..., embed=True),
-    runAfterCreate: bool = False
+        config: ProcessConfig,
+        # payload: dict = Body(..., embed=True),
+        runAfterCreate: bool = False
 ):
     # config = ProcessConfig(payload)
     try:
@@ -234,7 +238,7 @@ async def websocket_status(websocket: WebSocket, task_id):
                         await websocket.send_text(
                             json.dumps(
                                 {'type': "log", 'data': task.message_queue[(
-                                    recv.get('request') or 0):]},
+                                                                                   recv.get('request') or 0):]},
                                 ensure_ascii=False
                             ))
                     else:
@@ -267,6 +271,27 @@ async def websocket_tasks(websocket: WebSocket):
                 return
     except WebSocketDisconnect:
         return
+
+
+@app.get('/update')
+async def update_download_data(source: Literal['best', 'ai'], proxy: str = None, timeout: int = None,
+                               refresh: bool = False):
+    root = os.path.join(
+        os.path.expanduser('~/Documents'), "SekaiSubtitle", "data", source, "tree")
+    os.makedirs(root, exist_ok=True)
+    file = os.path.join(root, 'tree.json')
+    if refresh:
+        data, result = download_list(source, proxy, timeout)
+    else:
+        data = tools.read_json(file,{})
+        result = True
+    return {"success": result, 'data': data}
+
+
+@app.get('/download')
+async def download_data(url: str, path: str = None, proxy: str = None, timeout: int = None):
+    result, save_path = download_file(url, path, proxy, timeout)
+    return {"success": result, 'data': save_path}
 
 
 @app.on_event("shutdown")

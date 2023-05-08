@@ -12,9 +12,9 @@ import cv2
 import numpy as np
 import yaml
 
-from subtitle import match, reference, tools
-from subtitle.constant import DISPLAY_NAME_STYLE, subtitle_styles_format, staff_style_format, get_divider_event
-from subtitle.subtitle import Subtitle
+from lib import match, reference, tools
+from lib.constant import DISPLAY_NAME_STYLE, subtitle_styles_format, staff_style_format, get_divider_event
+from lib.subtitle import Subtitle
 
 from pydantic import BaseModel
 from typing import Optional

@@ -381,7 +381,8 @@ unit_dict = {
     "street": "Vivid BAD SQUAD",
     "wonder": "Wonderlands × Showtime",
     "idol": "MORE MORE JUMP！",
-    "special": "特殊", "shuffle": "混活"
+    "special": "特殊", "shuffle": "混活",
+    "akuno": "悪ノ大罪シリーズ"
 }
 
 

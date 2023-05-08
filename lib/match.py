@@ -5,9 +5,9 @@ from typing import List
 import cv2
 import numpy as np
 
-from subtitle.reference import get_area_mask_size, get_area_banner_mask
-from subtitle.tools import check_dark, check_img_aberration
-from subtitle.constant import b64_menu, b64_banner, b64_place, b64_point
+from lib.reference import get_area_mask_size, get_area_banner_mask
+from lib.tools import check_dark, check_img_aberration
+from lib.constant import b64_menu, b64_banner, b64_place, b64_point
 
 
 def base64_cv2(base64_str) -> np.ndarray:
