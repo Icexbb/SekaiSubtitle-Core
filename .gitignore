@@ -1,9 +1,11 @@
 *.exe
 *.cmd
-
+*.sh
 temp.*
 test.*
 *.upx
+*.pyc
+__pycache__
 
 temp
 test

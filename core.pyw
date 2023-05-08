@@ -1,9 +1,12 @@
+import os
+from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import json
 from threading import Thread
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, WebSocketException
 from subtitle.process import SekaiJsonVideoProcess, ProcessConfig
+import cv2
 
 
 class App(FastAPI):
@@ -48,8 +51,6 @@ class App(FastAPI):
 
 app = App()
 
-from fastapi.middleware.cors import CORSMiddleware
-
 
 origins = [
     "http://localhost",
@@ -64,8 +65,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.post("/new")
-async def create_task(config: ProcessConfig, runAfterCreate: bool = False):
+async def create_task(
+    config: ProcessConfig,
+    # payload: dict = Body(..., embed=True),
+    runAfterCreate: bool = False
+):
+    # config = ProcessConfig(payload)
     try:
         task_id = app.create_task(config)
     except Exception as e:
@@ -81,12 +88,14 @@ async def create_task(config: ProcessConfig, runAfterCreate: bool = False):
 async def start_task(task_id: str):
     if task := app.get_task(task_id):
         if task.processing:
-            raise HTTPException(400, {"success": False, "error": f"Task {task_id} is Already Running"})
+            raise HTTPException(
+                400, {"success": False, "error": f"Task {task_id} is Already Running"})
         else:
             await app.run_task(task_id=task_id)
             return {'success': True, "data": task_id}
     else:
-        raise HTTPException(400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
+        raise HTTPException(
+            400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
 
 
 @app.post('/stop/{task_id}')
@@ -98,12 +107,15 @@ async def stop_task(task_id: str):
             if not task.processing:
                 return {"success": True, "data": task_id}
             else:
-                raise HTTPException(400, {"success": False, "error": f"Task {task_id} Failed to Stop"})
+                raise HTTPException(
+                    400, {"success": False, "error": f"Task {task_id} Failed to Stop"})
         else:
-            raise HTTPException(400, {"success": False, "error": f"Task {task_id} is Already Stopped"})
+            raise HTTPException(
+                400, {"success": False, "error": f"Task {task_id} is Already Stopped"})
 
     else:
-        raise HTTPException(400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
+        raise HTTPException(
+            400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
 
 
 @app.post("/restart/{task_id}")
@@ -124,7 +136,8 @@ async def reload_task(task_id, runAfterCreate: bool = False):
         app.delete_task(task_id)
         await create_task(config, runAfterCreate)
     else:
-        raise HTTPException(400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
+        raise HTTPException(
+            400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
 
 
 @app.post('/delete/{task_id}')
@@ -132,7 +145,8 @@ async def delete_task(task_id):
     try:
         app.delete_task(task_id)
     except ValueError:
-        raise HTTPException(400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
+        raise HTTPException(
+            400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
     else:
         return {"success": True, 'data': task_id}
 
@@ -152,6 +166,10 @@ async def task_status():
         task_id: 'processing' if app.get_task(task_id).processing else "idle"
         for task_id in app.TaskList.keys()
     }
+    for task_id in data:
+        if data[task_id] == "idle":
+            app.TaskThreads[task_id] = None
+            del app.TaskThreads[task_id]
     return {'success': True, "data": data}
 
 
@@ -160,7 +178,46 @@ async def task_config(task_id):
     if task := app.get_task(task_id):
         return {'success': True, "data": task.config.dict()}
     else:
-        raise HTTPException(400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
+        raise HTTPException(
+            400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
+
+
+@app.get("/videoInfo")
+async def task_config(video_file: str):
+    print(video_file)
+    if os.path.exists(video_file):
+        vc = cv2.VideoCapture(video_file)
+        return {"success": True, "data": {
+            "frameHeight": vc.get(cv2.CAP_PROP_FRAME_HEIGHT),
+            "frameWidth": vc.get(cv2.CAP_PROP_FRAME_WIDTH),
+            "frameCount": vc.get(cv2.CAP_PROP_FRAME_COUNT),
+            "videoFps": vc.get(cv2.CAP_PROP_FPS)
+        }}
+    else:
+        raise HTTPException(
+            400, {"success": False, "error": f"File {video_file} Does Not Exists"})
+
+
+@app.get("/autoSelect")
+async def auto_select(video_file: str, file_type: str):
+    if os.path.exists(video_file):
+        file_dir = os.path.dirname(video_file)
+        file_base_name = os.path.basename(video_file)
+        file_name, file_ext = os.path.splitext(file_base_name)
+        dir_list = [file for file in os.listdir(file_dir)
+                    if file.startswith(file_name) and (file_ext in ['.json', '.asset', '.yml', '.txt'])]
+        json_file = sorted([file for file in dir_list if os.path.splitext(
+            file_ext)[1].lower() in ['.asset', '.json']], reverse=True)
+        translate_file = sorted([file for file in dir_list if os.path.splitext(
+            file_ext)[1].lower() in ['.yml', '.txt']], reverse=True)
+        return {
+            "success": True, "data": {
+                "json": json_file[0] if json_file else None,
+                "translate": translate_file[0] if translate_file else None
+            }}
+    else:
+        raise HTTPException(
+            400, {"success": False, "error": f"File {video_file} Does Not Exists"})
 
 
 @app.websocket('/status/{task_id}')
@@ -176,7 +233,8 @@ async def websocket_status(websocket: WebSocket, task_id):
                     if task.message_queue:
                         await websocket.send_text(
                             json.dumps(
-                                {'type': "log", 'data': task.message_queue[(recv.get('request') or 0):]},
+                                {'type': "log", 'data': task.message_queue[(
+                                    recv.get('request') or 0):]},
                                 ensure_ascii=False
                             ))
                     else:

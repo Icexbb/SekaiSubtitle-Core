@@ -24,10 +24,11 @@ class ProcessConfig(BaseModel):
     video_file: str
     json_file: Optional[str]
     translate_file: Optional[str]
+    output_path: Optional[str]
 
     overwrite: Optional[bool] = True
     font: Optional[str] = "思源黑体 CN Bold"
-    dryrun: Optional[bool] = False
+    video_only: Optional[bool] = False
     staff: Optional[list[dict]] = []
     typer_interval: Optional[list[int, int]] = [80, 50]
     duration: Optional[list[int, int]] = None
@@ -47,22 +48,21 @@ class SekaiJsonVideoProcess:
         self.video_file = self.config.video_file
         self.json_file = self.config.json_file
         self.translate_file = self.config.translate_file
-
-        self.time_start = time.time()
-        self.id = hashlib.md5(f"{self.video_file}_{self.time_start}".encode('utf8')).hexdigest()
+        self.output_path = self.config.output_path
 
         self.overwrite = self.config.overwrite
         self.font = self.config.font
-        self.dryrun = self.config.dryrun
+        self.video_only = self.config.video_only
         self.staff = self.config.staff
         self.typer_interval = self.config.typer_interval
         self.duration = self.config.duration
         self.debug = self.config.debug
-        self.output_path = os.path.realpath(os.path.splitext(self.video_file)[0] + ".ass")
 
-        self.message_queue = []  # Queue()
+        self.message_queue = []
+        self.time_start = time.time()
+        self.id = hashlib.md5(f"{self.video_file}_{self.time_start}".encode('utf8')).hexdigest()
 
-        self.log("initial", f"文件输出到 {self.output_path}")
+        self.log("initial", f"使用视频文件：{self.video_file}")
 
         if self.duration:
             self.log("initial", f"设置视频处理区间：{self.duration[0]}帧 -> {self.duration[-1]}帧")
@@ -71,7 +71,7 @@ class SekaiJsonVideoProcess:
             raise FileNotFoundError
 
         # self.json_file: str | list = json_file
-        if not self.dryrun:
+        if not self.video_only:
             if not self.json_file:
                 predict_path = os.path.splitext(self.video_file)[0] + ".json"
                 if os.path.exists(predict_path):
@@ -84,9 +84,12 @@ class SekaiJsonVideoProcess:
                 if not os.path.exists(self.json_file):
                     self.log("initial", f"JSON文件 {self.json_file} 不存在")
                     raise FileNotFoundError("Json File Not Found")
+                else:
+                    self.log("initial", f"使用数据文件：{self.json_file}")
             elif isinstance(self.json_file, list):
                 if len(self.json_file) == 1:
                     self.json_file: str = self.json_file[0]
+            
 
         if self.json_file and not isinstance(self.json_file, list):
             if not self.translate_file:
@@ -108,8 +111,11 @@ class SekaiJsonVideoProcess:
         elif os.path.exists(self.output_path):
             if not self.overwrite:
                 raise FileExistsError
+        else:
+            self.log("initial", f"文件输出到 {self.output_path}")
+            
 
-        if not self.dryrun:
+        if not self.video_only:
             self.load_json()
         else:
             self.log("initial", f"不使用数据文件")
@@ -272,7 +278,7 @@ class SekaiJsonVideoProcess:
         tag_data: list[dict] = []
         tag_data_count = len(tag_data)
 
-        if not self.dryrun:
+        if not self.video_only:
             dialog_data: list[dict] = copy.deepcopy(self.json_data['TalkData'])
             dialog_total_count = len(dialog_data)
             banner_data: list[dict] = [item for item in self.json_data['SpecialEffectData'] if item['EffectType'] == 8]
@@ -324,7 +330,7 @@ class SekaiJsonVideoProcess:
         dialog_index = []
         td_count = 0
         total_count = 0
-        if not self.dryrun:
+        if not self.video_only:
             for item in self.json_data.get("Snippets"):
                 if item["Action"] == 1:
                     total_count += 1
@@ -339,7 +345,7 @@ class SekaiJsonVideoProcess:
                         total_count += 1
                         tag_index.append(total_count - 1)
                     se_count += 1
-        if not self.dryrun:
+        if not self.video_only:
             tag_process_running = bool(tag_data)
             banner_process_running = bool(banner_data)
             dialog_process_running = bool(dialog_data)
@@ -362,7 +368,7 @@ class SekaiJsonVideoProcess:
                 if running_process_count:
                     with futures.ThreadPoolExecutor(running_process_count) as executor:
                         future_tasks = []
-                        if not self.dryrun:
+                        if not self.video_only:
                             unprocessed_event = dialog_index[dialog_processed:] + banner_index[banner_processed:] + \
                                                 tag_index[tag_processed_count:]
                             se_index_now = min(unprocessed_event)
@@ -371,15 +377,15 @@ class SekaiJsonVideoProcess:
                                                      dialog_last_center)
                             future_tasks.append(future)
                         if banner_process_running:
-                            if self.duration or self.dryrun or \
-                                    (not (self.dryrun and self.duration)
+                            if self.duration or self.video_only or \
+                                    (not (self.video_only and self.duration)
                                      and banner_index[banner_processed] == se_index_now):
                                 future = executor.submit(
                                     self.match_frame_banner, g_frame, banner_mask_area, banner_edge_pattern)
                                 future_tasks.append(future)
                         if tag_process_running:
-                            if self.duration or self.dryrun or \
-                                    (not (self.dryrun and self.duration)
+                            if self.duration or self.video_only or \
+                                    (not (self.video_only and self.duration)
                                      and tag_index[tag_processed_count] == se_index_now):
                                 future = executor.submit(self.match_frame_tag, frame, tag_pattern)
                                 future_tasks.append(future)
@@ -393,7 +399,7 @@ class SekaiJsonVideoProcess:
                                     dialog_processing_frames.append(
                                         {"frame": now_frame_count, "point_center": dialog_point_center})
                                 if dialog_status == 1:
-                                    if not self.dryrun:
+                                    if not self.video_only:
                                         index = self.json_data.get('TalkData').index(dialog_data_processing)
                                         if index:
                                             dialog_is_mask_start = self.json_data.get('TalkData')[index - 1][
@@ -411,7 +417,7 @@ class SekaiJsonVideoProcess:
 
                                 if dialog_status in [0, 1] and last_status == 2:  # End Dialog
                                     dialog_processed += 1
-                                    if not self.dryrun and dialog_data_processing:
+                                    if not self.video_only and dialog_data_processing:
                                         events = self.dialog_make_sequence(
                                             dialog_processing_frames, dialog_data_processing,
                                             int(dialog_pointer.shape[0]), height, width, video_fps,
@@ -425,7 +431,7 @@ class SekaiJsonVideoProcess:
                                             dialog_processing_frames, None, int(dialog_pointer.shape[0]),
                                             height, width, video_fps,
                                             dialog_last_end_frame, dialog_last_end_event, dialog_is_mask_start)
-                                        if self.dryrun:
+                                        if self.video_only:
                                             self.log(
                                                 "process", f"Dialog {dialog_processed}: Output {len(events)} Events")
                                             self.log("warning", f"No Data For This Dialog, Please Recheck")
@@ -443,10 +449,10 @@ class SekaiJsonVideoProcess:
                                     dialog_data_processing = None
                                     dialog_is_mask_start = None
 
-                                    if dialog_processed == dialog_total_count and not self.dryrun:
+                                    if dialog_processed == dialog_total_count and not self.video_only:
                                         dialog_process_running = False
 
-                                if not self.dryrun and not dialog_data_processing:
+                                if not self.video_only and not dialog_data_processing:
                                     try:
                                         dialog_data_processing = dialog_data.pop(0)
                                     except IndexError:
@@ -463,7 +469,7 @@ class SekaiJsonVideoProcess:
                                 if banner_last_result and not banner_frame_result:
                                     banner_processed += 1
 
-                                    if self.dryrun:
+                                    if self.video_only:
                                         events = self.area_banner_make_sequence(banner_processing_frames, None,
                                                                                 banner_mask,
                                                                                 video_fps)
@@ -484,10 +490,10 @@ class SekaiJsonVideoProcess:
                                     banner_processing_frames = []
                                     banner_data_processing = None
 
-                                    if not self.dryrun and banner_processed == banner_data_count:
+                                    if not self.video_only and banner_processed == banner_data_count:
                                         banner_process_running = False
 
-                                if not self.dryrun and not banner_data_processing:
+                                if not self.video_only and not banner_data_processing:
                                     try:
                                         banner_data_processing = banner_data.pop(0)
                                     except IndexError:
@@ -503,7 +509,7 @@ class SekaiJsonVideoProcess:
                                 if tag_last_result and not tag_frame_result:
                                     tag_processed_count += 1
 
-                                    if self.dryrun:
+                                    if self.video_only:
                                         events = self.area_tag_make_sequence(None, height, width, video_fps,
                                                                              tag_processing_frames)
                                         self.log(
@@ -522,10 +528,10 @@ class SekaiJsonVideoProcess:
                                     tag_processing_frames = []
                                     tag_data_processing = None
 
-                                    if not self.dryrun and tag_processed_count == tag_data_count:
+                                    if not self.video_only and tag_processed_count == tag_data_count:
                                         tag_process_running = False
 
-                                if not self.dryrun and not tag_data_processing:
+                                if not self.video_only and not tag_data_processing:
                                     try:
                                         tag_data_processing = tag_data.pop(0)
                                     except IndexError:
@@ -536,6 +542,7 @@ class SekaiJsonVideoProcess:
             self.emit({
                 "frame": now_frame_count,
                 "time": round(time.time() - self.time_start, 3),
+                "remains":self.frame_process_total-self.frame_processed,
                 "progress": self.process_progress
             })
 
@@ -547,7 +554,7 @@ class SekaiJsonVideoProcess:
                 raise ValueError('No Event Matched')
             dialog_styles = self.dialog_make_styles(dialog_const_point_center, int(dialog_pointer.shape[0]))
             self.log("process", f"Matching Process Finished")
-            if (not self.dryrun) and dialog_data + banner_data + tag_data:
+            if (not self.video_only) and dialog_data + banner_data + tag_data:
                 recheck = []
                 if dialog_data:
                     recheck.append("Dialog")
@@ -817,6 +824,69 @@ class SekaiJsonVideoProcess:
         events_mask.append(mask_event_data)
         return events_mask + events_body
 
+    def make_staff_event(self,dialog_fontsize:int)->list[dict]:
+        staff_event = []
+        staff_style = []
+        def make_body(data):
+            string = ""
+            staffs = {}
+            if s := (data.get("prefix")).strip():
+                        string += f"{s}\n"
+            if s := (data.get("recorder")).strip():
+                        d = staffs.get(s) or []
+                        d.append("录制")
+                        staffs[s] = d
+            if s := (data.get("translator")).strip():
+                        d = staffs.get(s) or []
+                        d.append("翻译")
+                        staffs[s] = d
+            if s := (data.get("translate_proof")).strip():
+                        d = staffs.get(s) or []
+                        d.append("翻校")
+                        staffs[s] = d
+            if s := (data.get("subtitle_maker")).strip():
+                        d = staffs.get(s) or []
+                        d.append("时轴")
+                        staffs[s] = d
+            if s := (data.get("subtitle_proof")).strip():
+                        d = staffs.get(s) or []
+                        d.append("轴校")
+                        staffs[s] = d
+            if s := (data.get("compositor")).strip():
+                        d = staffs.get(s) or []
+                        d.append("压制")
+                        staffs[s] = d
+            sort = ["录制", "翻译", "翻校", "时轴", "轴校", "压制"]
+            staff_pair = sorted(staffs.items(), key=lambda x: min([sort.index(s) for s in x[1]]))
+            staff_string = "\n".join([f"{'&'.join(staff[1])}：{staff[0]}" for staff in staff_pair])
+            if staff_string:
+                string += f"{staff_string}\n"
+            if s := (data.get("suffix")).strip():
+                string += f"{s}\n"
+            string = string.strip().replace("\n", r"\N")
+            fade_time = data.get("fade")
+            fad_string = f"{{\\fad({fade_time[0]},{fade_time[0]})}}"
+            string = fad_string+string
+            return string
+        for item in self.staff:
+            body= make_body(item)
+            style_name =f"Staff-{hashlib.md5(body.encode('utf8')).hexdigest()[:3]}" 
+            event = {
+                'Layer': 1, 'MarginL': 0, 'MarginR': 0, 'MarginV': 0,'Name': 'staff','Effect': '',
+                'Start': '0:00:00.00', 'End': tools.timedelta_to_string(timedelta(seconds=item["duration"])),
+                'Style': style_name, 'Text': body
+            }
+            style = copy.deepcopy(staff_style_format)
+            style['Name'] = style_name
+            style['Fontsize'] = int(item['fontsize']*(dialog_fontsize if item["fontsize_type"]== 'ratio' else 1))
+            style['Alignment'] = item['position']
+            style['MarginL']=item['margin_lr']
+            style['MarginR']=item['margin_lr']
+            style["MarginV"] = item["margin_v"]
+            staff_style.append(style)
+            staff_event.append(event)
+        return staff_event,staff_style
+
     def run(self):
         self.processing = True
         self.stop = False
@@ -834,26 +904,20 @@ class SekaiJsonVideoProcess:
             self.log("error", e)
             raise e
         else:
-            video_height = self.VideoCapture.get(4)
-            video_width = self.VideoCapture.get(3)
+            video_height = self.VideoCapture.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            video_width = self.VideoCapture.get(cv2.CAP_PROP_FRAME_WIDTH)
 
-            staff_style = []
-            for staff in self.staff:
-                style = copy.deepcopy(staff_style_format)
-                style['Name'] = staff["Style"]
-                style_align = int(staff["Style"][-1])
-                style['Alignment'] = style_align
-                if style_align == 1:
-                    style["MarginL"] = int(style["MarginL"] * (5 / 3))
-                staff_style.append(style)
+            staff_events,staff_style = self.make_staff_event(
+                [s for s in dialog_styles if s['Name']=='初音ミク'][0]['Fontsize']
+                )
+                
             filename = os.path.splitext(os.path.split(self.video_file)[-1])[0]
             events = \
                 get_divider_event(f"{filename} - Made by SekaiSubtitle", 10) + \
-                get_divider_event("Staff Start") + self.staff + get_divider_event("Staff End") + \
+                get_divider_event("Staff Start") + staff_events + get_divider_event("Staff End") + \
                 get_divider_event("Banner Start") + banner_events + get_divider_event("Banner End") + \
                 get_divider_event("Tag Start") + tag_events + get_divider_event("Tag End") + \
                 get_divider_event("Dialog Start") + dialogs_events + get_divider_event("Dialog End")
-
             res = {
                 "ScriptInfo": {"PlayResX": video_width, "PlayResY": video_height},
                 "Garbage": {"video": self.video_file},
