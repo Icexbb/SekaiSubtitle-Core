@@ -7,3 +7,4 @@ numpy~=1.24.3
 PyYAML~=6.0
 pydantic~=1.10.7
 ass~=0.5.3
+httpx~=0.24.0

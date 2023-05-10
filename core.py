@@ -10,47 +10,76 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, WebS
 from fastapi.middleware.cors import CORSMiddleware
 
 from lib import tools
-from lib.download import download_list, download_file
+from lib.download import download_list, DownloadTask, DownloadConfig
 from lib.process import SekaiJsonVideoProcess, ProcessConfig
 
 
 class App(FastAPI):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.TaskList: dict[str, SekaiJsonVideoProcess] = {}
-        self.TaskThreads: dict[str, Thread] = {}
-        self.TaskLog: dict[str, list] = {}
+        self.SubtitleTaskList: dict[str, SekaiJsonVideoProcess] = {}
+        self.SubtitleTaskThreads: dict[str, Thread] = {}
+        self.DownloadTaskList: dict[str, DownloadTask] = {}
 
-    def create_task(self, config: ProcessConfig):
+    def create_subtitle_task(self, config: ProcessConfig):
         try:
             new_task = SekaiJsonVideoProcess(config)
-            self.TaskList[new_task.id] = new_task
+            self.SubtitleTaskList[new_task.id] = new_task
         except Exception as e:
             raise e
         else:
             return new_task.id
 
-    def get_task(self, task_id):
-        return self.TaskList[task_id] if task_id in self.TaskList.keys() else None
-
-    async def run_task(self, task_id):
-        task = self.get_task(task_id)
-        if not task:
-            raise KeyError
+    def get_subtitle_task(self, task_id):
+        if task_id in self.SubtitleTaskList.keys():
+            return self.SubtitleTaskList[task_id]
         else:
-            thread_run = Thread(target=task.run)
-            self.TaskThreads[task_id] = thread_run
-            thread_run.daemon = True
-            thread_run.start()
-
-    def delete_task(self, task_id):
-        task = self.get_task(task_id)
-        if not task:
             raise KeyError
+
+    def run_subtitle_task(self, task_id):
+        task = self.get_subtitle_task(task_id)
+        thread_run = Thread(target=task.run)
+        self.SubtitleTaskThreads[task_id] = thread_run
+        thread_run.daemon = True
+        thread_run.start()
+
+    def delete_subtitle_task(self, task_id):
+        try:
+            task = self.get_subtitle_task(task_id)
+        except KeyError as e:
+            raise e
         else:
             if task.processing:
                 task.set_stop()
-            del self.TaskList[task_id]
+            del self.SubtitleTaskList[task_id]
+            return True
+
+    def create_download_task(self, config: DownloadConfig):
+        try:
+            new_task = DownloadTask(config)
+            self.DownloadTaskList[new_task.hash] = new_task
+        except Exception as e:
+            raise e
+        else:
+            return new_task.hash
+
+    def get_download_task(self, task_id):
+        if task_id in self.DownloadTaskList.keys():
+            return self.DownloadTaskList[task_id]
+        else:
+            raise KeyError
+
+    def run_download_task(self, task_id):
+        task = self.get_download_task(task_id)
+        return task.download()
+
+    def delete_download_task(self, task_id):
+        try:
+            task = self.get_download_task(task_id)
+        except KeyError as e:
+            raise e
+        else:
+            del self.DownloadTaskList[task_id]
             return True
 
 
@@ -70,41 +99,41 @@ app.add_middleware(
 )
 
 
-@app.post("/new")
+@app.post("/subtitle/new")
 async def create_task(
         config: ProcessConfig,
-        # payload: dict = Body(..., embed=True),
         runAfterCreate: bool = False
 ):
-    # config = ProcessConfig(payload)
     try:
-        task_id = app.create_task(config)
+        task_id = app.create_subtitle_task(config)
     except Exception as e:
         print(e)
         raise HTTPException(400, {"success": False, "error": e.__repr__()})
     else:
         if runAfterCreate:
-            await app.run_task(task_id=task_id)
+            app.run_subtitle_task(task_id=task_id)
         return {'success': True, "data": task_id}
 
 
-@app.post('/start/{task_id}')
+@app.post('/subtitle/start/{task_id}')
 async def start_task(task_id: str):
-    if task := app.get_task(task_id):
+    try:
+        task = app.get_subtitle_task(task_id)
         if task.processing:
             raise HTTPException(
                 400, {"success": False, "error": f"Task {task_id} is Already Running"})
         else:
-            await app.run_task(task_id=task_id)
+            app.run_subtitle_task(task_id=task_id)
             return {'success': True, "data": task_id}
-    else:
+    except KeyError:
         raise HTTPException(
             400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
 
 
-@app.post('/stop/{task_id}')
+@app.post('/subtitle/stop/{task_id}')
 async def stop_task(task_id: str):
-    if task := app.get_task(task_id):
+    try:
+        task = app.get_subtitle_task(task_id)
         if task.processing:
             task.set_stop()
             await asyncio.sleep(1)
@@ -116,38 +145,27 @@ async def stop_task(task_id: str):
         else:
             raise HTTPException(
                 400, {"success": False, "error": f"Task {task_id} is Already Stopped"})
-
-    else:
+    except KeyError:
         raise HTTPException(
             400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
 
 
-@app.post("/restart/{task_id}")
-async def restart_task(task_id):
-    if task := app.get_task(task_id):
-        if task.processing:
-            task.set_stop()
-            await asyncio.sleep(1)
-            if not task.processing:
-                await app.run_task(task_id=task_id)
-                return {'success': True, "data": task_id}
-
-
-@app.post("/reload/{task_id}")
+@app.post("/subtitle/reload/{task_id}")
 async def reload_task(task_id, runAfterCreate: bool = False):
-    if task := app.get_task(task_id):
+    try:
+        task = app.get_subtitle_task(task_id)
         config = task.config.copy()
-        app.delete_task(task_id)
-        await create_task(config, runAfterCreate)
-    else:
+        app.delete_subtitle_task(task_id)
+        return await create_task(config, runAfterCreate)
+    except KeyError:
         raise HTTPException(
             400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
 
 
-@app.post('/delete/{task_id}')
+@app.post('/subtitle/delete/{task_id}')
 async def delete_task(task_id):
     try:
-        app.delete_task(task_id)
+        app.delete_subtitle_task(task_id)
     except ValueError:
         raise HTTPException(
             400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
@@ -155,39 +173,34 @@ async def delete_task(task_id):
         return {"success": True, 'data': task_id}
 
 
-@app.get("/taskList")
+@app.get("/subtitle/taskList")
 async def task_list(running: bool = False):
     data = []
-    for task_id in app.TaskList.keys():
-        if (running and app.get_task(task_id).processing) or (not running):
+    for task_id in app.SubtitleTaskList.keys():
+        if (running and app.get_subtitle_task(task_id).processing) or (not running):
             data.append(task_id)
     return {'success': True, "data": data}
 
 
-# @app.get("/taskStatus")
-async def task_status():
+async def subtitle_task_status():
     data = {
-        task_id: 'processing' if app.get_task(task_id).processing else "idle"
-        for task_id in app.TaskList.keys()
+        task_id: 'processing' if app.get_subtitle_task(task_id).processing else "idle"
+        for task_id in app.SubtitleTaskList.keys()
     }
-    for task_id in data:
-        if data[task_id] == "idle":
-            app.TaskThreads[task_id] = None
-            del app.TaskThreads[task_id]
     return {'success': True, "data": data}
 
 
-@app.get("/taskConfig/{task_id}")
-async def task_config(task_id):
-    if task := app.get_task(task_id):
+@app.get("/subtitle/taskConfig/{task_id}")
+async def subtitle_task_config(task_id):
+    if task := app.get_subtitle_task(task_id):
         return {'success': True, "data": task.config.dict()}
     else:
         raise HTTPException(
             400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
 
 
-@app.get("/videoInfo")
-async def task_config(video_file: str):
+@app.get("/subtitle/videoInfo")
+async def videoInfo(video_file: str):
     print(video_file)
     if os.path.exists(video_file):
         vc = cv2.VideoCapture(video_file)
@@ -202,8 +215,8 @@ async def task_config(video_file: str):
             400, {"success": False, "error": f"File {video_file} Does Not Exists"})
 
 
-@app.get("/autoSelect")
-async def auto_select(video_file: str, file_type: str):
+@app.get("/subtitle/autoSelect")
+async def subtitle_auto_select(video_file: str):
     if os.path.exists(video_file):
         file_dir = os.path.dirname(video_file)
         file_base_name = os.path.basename(video_file)
@@ -224,12 +237,12 @@ async def auto_select(video_file: str, file_type: str):
             400, {"success": False, "error": f"File {video_file} Does Not Exists"})
 
 
-@app.websocket('/status/{task_id}')
-async def websocket_status(websocket: WebSocket, task_id):
+@app.websocket('/subtitle/status/{task_id}')
+async def ws_subtitle_status(websocket: WebSocket, task_id):
     await websocket.accept()
     try_time = 0
     while try_time < 10:
-        task = app.get_task(task_id)
+        task = app.get_subtitle_task(task_id)
         if task:
             try:
                 while True:
@@ -237,8 +250,7 @@ async def websocket_status(websocket: WebSocket, task_id):
                     if task.message_queue:
                         await websocket.send_text(
                             json.dumps(
-                                {'type': "log", 'data': task.message_queue[(
-                                                                                   recv.get('request') or 0):]},
+                                {'type': "log", 'data': task.message_queue[(recv.get('request') or 0):]},
                                 ensure_ascii=False
                             ))
                     else:
@@ -252,7 +264,7 @@ async def websocket_status(websocket: WebSocket, task_id):
         raise WebSocketException(1003, "Task Doesn't Exist")
 
 
-@app.websocket('/tasks')
+@app.websocket('/subtitle/tasks')
 async def websocket_tasks(websocket: WebSocket):
     await websocket.accept()
     try:
@@ -260,7 +272,7 @@ async def websocket_tasks(websocket: WebSocket):
         while True:
             recv = await websocket.receive_json()
             if recv.get("type") == "alive":
-                new = (await task_status())['data']
+                new = (await subtitle_task_status())['data']
                 if data == new:
                     await websocket.send_text(json.dumps({'type': "alive"}, ensure_ascii=False))
                 else:
@@ -273,9 +285,42 @@ async def websocket_tasks(websocket: WebSocket):
         return
 
 
-@app.get('/update')
-async def update_download_data(source: Literal['best', 'ai'], proxy: str = None, timeout: int = None,
-                               refresh: bool = False):
+@app.websocket('/download/tasks')
+async def ws_download_tasks(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        data = None
+        while True:
+            recv = await websocket.receive_json()
+            if recv.get("type") == "alive":
+                new = {
+                    task_id: app.get_download_task(task_id).downloaded
+                    for task_id in app.DownloadTaskList.keys()
+                }
+                if data == new:
+                    await websocket.send_text(json.dumps({'type': "alive"}, ensure_ascii=False))
+                else:
+                    await websocket.send_text(
+                        json.dumps({'type': "tasks", 'data': new}, ensure_ascii=False))
+                    data = new
+            else:
+                return
+    except WebSocketDisconnect:
+        return
+
+
+@app.get("/download/taskConfig/{task_id}")
+async def download_task_config(task_id):
+    if task := app.get_download_task(task_id):
+        return {'success': True, "data": task.data}
+    else:
+        raise HTTPException(
+            400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
+
+
+@app.get('/download/update')
+async def update_download_data(
+        source: Literal['best', 'ai'], proxy: str = None, timeout: int = None, refresh: bool = False):
     root = os.path.join(
         os.path.expanduser('~/Documents'), "SekaiSubtitle", "data", source, "tree")
     os.makedirs(root, exist_ok=True)
@@ -283,27 +328,41 @@ async def update_download_data(source: Literal['best', 'ai'], proxy: str = None,
     if refresh:
         data, result = download_list(source, proxy, timeout)
     else:
-        data = tools.read_json(file,{})
+        data = tools.read_json(file, {})
         result = True
     return {"success": result, 'data': data}
 
 
-@app.get('/download')
-async def download_data(url: str, path: str = None, proxy: str = None, timeout: int = None):
-    result, save_path = download_file(url, path, proxy, timeout)
-    return {"success": result, 'data': save_path}
+@app.post('/download/new')
+async def new_download_task(config: DownloadConfig):
+    hashId = app.create_download_task(config)
+    return {"success": True, 'data': hashId}
+
+
+@app.post('/download/start/{task_id}')
+async def start_download_task(task_id: str):
+    try:
+        result = app.run_download_task(task_id)
+        return {"success": result}
+    except KeyError:
+        raise HTTPException(
+            400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
+
+
+@app.post('/download/delete/{task_id}')
+async def delete_download_task(task_id: str):
+    try:
+        result = app.delete_download_task(task_id)
+        return {"success": result}
+    except KeyError:
+        raise HTTPException(
+            400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    for task_id in list(app.TaskList.keys()):
-        app.delete_task(task_id)
-
-
-@app.get("/shutdown")
-async def close():
-    await shutdown()
-    exit(0)
+    for task_id in list(app.SubtitleTaskList.keys()):
+        app.delete_subtitle_task(task_id)
 
 
 if __name__ == '__main__':

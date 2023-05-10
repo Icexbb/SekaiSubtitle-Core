@@ -1,9 +1,10 @@
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Literal
+from typing import Literal, Optional
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import BaseModel
 
 from lib import tools, constant
 
@@ -20,7 +21,6 @@ def update_source_ai():
         "actionSets.json": root + "actionSets?$limit=3000",
         "specialStories.json": root + "specialStories?$limit=1000",
     }
-
     return result
 
 
@@ -68,14 +68,14 @@ def download_list(source: Literal['best', 'ai'], proxy=None, timeout=None):
     return tools.read_json(os.path.join(root, "tree.json")), success == 8
 
 
-def download_file(url, path=None, proxy=None, timeout=None):
+def download_file(url, dir_name=None, proxy=None, timeout=None):
     parsed_url = urlparse(url)
     source = "best" if 'best' in parsed_url.hostname else "ai"
     filename = os.path.basename(parsed_url.path)
-    if not path:
-        root = os.path.join(
-            os.path.expanduser('~/Documents'), "SekaiSubtitle", "data", source, "tree")
-        path = os.path.join(root, filename)
+    if not dir_name:
+        dir_name = os.path.join(
+            os.path.expanduser('~/Documents'), "SekaiSubtitle", "data", source)
+    path = os.path.join(dir_name, filename)
     return download(url, path, proxy, timeout), path
 
 
@@ -135,9 +135,9 @@ def update_tree(root, source):
         tree['活动剧情'] = {}
         for item in data:
             try:
-                ev_name = f"{item['eventId']}:{events[item['eventId'] - 1]['name']}"
+                ev_name = f"{item['eventId']:03d}:{events[item['eventId'] - 1]['name']}"
             except IndexError:
-                ev_name = f"Event{item['eventId']}"
+                ev_name = f"Event{item['eventId']:03d}"
             ev_ep = {}
             for ep in item["eventStoryEpisodes"]:
                 if source == "best":
@@ -215,7 +215,7 @@ def update_tree(root, source):
                 if release_event_id > 100000:
                     release_event_id = int((release_event_id % 10000) / 100) + 1
                 unit = constant.unit_dict[scenario_id.split("_")[2]]
-                key = f"{release_event_id}: {events[release_event_id - 1]['name']} - {unit}" \
+                key = f"{release_event_id:03d}: {events[release_event_id - 1]['name']} - {unit}" \
                     if release_event_id < len(events) else f"{release_event_id}: 未知活动 - {unit}"
                 d = tree['地图对话 - 活动追加'].get(key) or {}
                 d[as_id] = url
@@ -250,3 +250,54 @@ def update_tree(root, source):
         os.makedirs(root, exist_ok=True)
         tools.save_json(os.path.join(root, "tree.json"), tree)
     return tree
+
+
+class DownloadConfig(BaseModel):
+    hash: str
+    name: str
+    url: str
+    path: Optional[str] = None
+    proxy: Optional[str] = None
+    timeout: Optional[int] = None
+
+
+class DownloadTask:
+    def __init__(self, config: DownloadConfig):
+        self.config = config
+        self.hash = config.hash
+        self.url = config.url
+        self.name = config.name
+
+        self.parsed_url = urlparse(self.url)
+        self.source = "best" if 'best' in str(self.parsed_url.hostname) else "ai"
+        self.filename = os.path.basename(self.parsed_url.path)
+
+        self.dir = config.path or os.path.join(os.path.expanduser('~/Documents'), "SekaiSubtitle", "data", self.source)
+        self.proxy = {"http://": config.proxy, "https://": config.proxy} if config.proxy else None
+        self.timeout = config.timeout if config.timeout else None
+        self.fullpath = os.path.join(self.dir, self.filename)
+        self.downloaded = False
+
+    @property
+    def data(self):
+        d = self.config.dict()
+        d['fullpath'] = self.fullpath
+        return d
+
+    @property
+    def exist(self):
+        return os.path.exists(self.fullpath)
+
+    def download(self):
+        try_time = 0
+        while try_time <= 5:
+            try:
+                with httpx.Client(proxies=self.proxy) as client:
+                    resp = client.request("GET", self.url, timeout=self.timeout)
+                    if resp.status_code == 200:
+                        tools.save_json(os.path.join(self.dir, self.filename), resp.json())
+                        self.downloaded = True
+                        return True
+            except Exception:
+                try_time += 1
+        return False
