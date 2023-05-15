@@ -1,23 +1,22 @@
 # -*- coding: utf-8 -*-
 import copy
+import hashlib
 import json
 import os
 import re
 import time
 from concurrent import futures
 from datetime import timedelta
-import hashlib
+from typing import Optional
 
 import cv2
 import numpy as np
 import yaml
+from pydantic import BaseModel
 
 from lib import match, reference, tools
 from lib.constant import DISPLAY_NAME_STYLE, subtitle_styles_format, staff_style_format, get_divider_event
 from lib.subtitle import Subtitle
-
-from pydantic import BaseModel
-from typing import Optional
 
 
 class ProcessConfig(BaseModel):
@@ -89,7 +88,6 @@ class SekaiJsonVideoProcess:
             elif isinstance(self.json_file, list):
                 if len(self.json_file) == 1:
                     self.json_file: str = self.json_file[0]
-            
 
         if self.json_file and not isinstance(self.json_file, list):
             if not self.translate_file:
@@ -113,7 +111,6 @@ class SekaiJsonVideoProcess:
                 raise FileExistsError
         else:
             self.log("initial", f"文件输出到 {self.output_path}")
-            
 
         if not self.video_only:
             self.load_json()
@@ -309,6 +306,7 @@ class SekaiJsonVideoProcess:
         dialog_data_processing = None
         dialog_processing_frames = []
         dialogs_events = []
+        characters_events = []
 
         now_frame_count = 0
         dialog_last_end_frame = None
@@ -393,8 +391,10 @@ class SekaiJsonVideoProcess:
                         task_iter = futures.as_completed(future_tasks)
                         for future in task_iter:
                             function_type, function_result = future.result()
+
                             if function_type == "dialog":
                                 dialog_status, dialog_point_center = function_result
+
                                 if dialog_status in [1, 2]:
                                     dialog_processing_frames.append(
                                         {"frame": now_frame_count, "point_center": dialog_point_center})
@@ -417,34 +417,31 @@ class SekaiJsonVideoProcess:
 
                                 if dialog_status in [0, 1] and last_status == 2:  # End Dialog
                                     dialog_processed += 1
-                                    if not self.video_only and dialog_data_processing:
-                                        events = self.dialog_make_sequence(
-                                            dialog_processing_frames, dialog_data_processing,
+
+                                    process_config_json = not self.video_only and dialog_data_processing
+
+                                    character_masks, character_events, dialog_masks, dialog_events = \
+                                        self.dialog_make_sequence(
+                                            dialog_processing_frames,
+                                            dialog_data_processing if process_config_json else None,
                                             int(dialog_pointer.shape[0]), height, width, video_fps,
                                             dialog_last_end_frame, dialog_last_end_event, dialog_is_mask_start)
-                                        self.log(
-                                            "process", f"Dialog {dialog_processed}: Output {len(events)} Events, "
-                                                       f"Remains {dialog_total_count - dialog_processed}/"
-                                                       f"{dialog_total_count}")
-                                    else:
-                                        events = self.dialog_make_sequence(
-                                            dialog_processing_frames, None, int(dialog_pointer.shape[0]),
-                                            height, width, video_fps,
-                                            dialog_last_end_frame, dialog_last_end_event, dialog_is_mask_start)
-                                        if self.video_only:
-                                            self.log(
-                                                "process", f"Dialog {dialog_processed}: Output {len(events)} Events")
-                                            self.log("warning", f"No Data For This Dialog, Please Recheck")
-                                        else:
-                                            self.log(
-                                                "process", f"Dialog {dialog_processed}: Output {len(events)} Events")
-                                            if len(events) > 2:
-                                                self.log(
-                                                    "warning", f"Jitter Happened in a No-Json Task, Please Recheck")
+
+                                    events = [*character_masks, *character_events, *dialog_masks, *dialog_events]
+
+                                    self.log(
+                                        "process",
+                                        f"Dialog {dialog_processed}: Output {len(events)} Events" +
+                                        (f", Remains {dialog_total_count - dialog_processed}/{dialog_total_count}"
+                                         if process_config_json else "")
+                                    )
 
                                     dialog_last_end_frame = dialog_processing_frames[-1]
                                     dialog_last_end_event = events[-1]
-                                    dialogs_events += events
+
+                                    dialogs_events += [*dialog_masks, *dialog_events]
+                                    characters_events += [*character_masks, *character_events]
+
                                     dialog_processing_frames = []
                                     dialog_data_processing = None
                                     dialog_is_mask_start = None
@@ -537,12 +534,13 @@ class SekaiJsonVideoProcess:
                                     except IndexError:
                                         tag_data_processing = None
                                 tag_last_result = tag_frame_result
+
             now_frame_count += 1
             self.frame_processed += 1
             self.emit({
                 "frame": now_frame_count,
                 "time": round(time.time() - self.time_start, 3),
-                "remains":self.frame_process_total-self.frame_processed,
+                "remains": self.frame_process_total - self.frame_processed,
                 "progress": self.process_progress
             })
 
@@ -563,7 +561,7 @@ class SekaiJsonVideoProcess:
                 if tag_data:
                     recheck.append("Tag")
                 self.log("process", f"Process Not Fully Matched in " + ",".join(recheck))
-            return dialogs_events, dialog_styles, banner_events, tag_events
+            return dialogs_events, characters_events, dialog_styles, banner_events, tag_events
         else:
             raise KeyboardInterrupt
 
@@ -574,7 +572,7 @@ class SekaiJsonVideoProcess:
             item = subtitle_styles[key]
             item["Fontsize"] = int(point_size * (83 / 56))
             if not key.startswith(("staff", "screen")):
-                if item["MarginL"] == 325:
+                if item["MarginL"] in [325, 385]:
                     item["MarginL"] = int(point_center[0] - 0.5 * point_size)
                     item["MarginV"] = int(point_center[1] + 1.25 * point_size)
             item["Fontname"] = self.font
@@ -653,13 +651,15 @@ class SekaiJsonVideoProcess:
 
         frame_points = np.array([item['point_center'] for item in dialog_frames])
         max_dis = [frame_points[:, i].max() - frame_points[:, i].min() for i in [0, 1]]
+
+        character_body = dialog_data["WindowDisplayName"] if dialog_data else ""
+
         jitter = max(max_dis) > 2
         if not jitter:
+            point_center = dialog_frames[0]['point_center']
+
             start_time = tools.timedelta_to_string(frame_time * (start_frame['frame'] + offset_frame))
-            end_time = tools.timedelta_to_string(frame_time * (
-                    end_frame['frame'] +
-                    # (1 if dialog_data and dialog_data.get("WhenFinishCloseWindow") else 0) +
-                    offset_frame))
+            end_time = tools.timedelta_to_string(frame_time * (end_frame['frame'] + offset_frame))
             dialog_body = self.dialog_body_typer(dialog_data["Body"], self.typer_interval) if dialog_data else ""
             if not dialog_is_mask_start and last_dialog_frame:
                 start_time = last_dialog_event['End']
@@ -674,12 +674,11 @@ class SekaiJsonVideoProcess:
                 "Text": dialog_body
             }
             mask_data = copy.deepcopy(event_data)
-            mask_string = reference.get_dialog_mask(reference.get_frame_data(
-                (video_width, video_height), dialog_frames[0]['point_center']), None)
+            mask_string = reference.get_dialog_mask(
+                reference.get_frame_data((video_width, video_height), point_center), None)
             mask_data["Text"] = mask_string
             mask_data["Style"] = 'screen'
             mask_data['Layer'] = 1
-
             if dialog_is_mask_start:
                 prefix = r"{\fad(100,0)}"
                 mask_data["Start"] = tools.timedelta_to_string(frame_time * max(0, start_frame['frame'] - 6))
@@ -687,12 +686,32 @@ class SekaiJsonVideoProcess:
             # if last_dialog_frame and last_dialog_event:
             #     if start_frame['frame'] - last_dialog_frame['frame'] <= 5:
             #         start_time = last_dialog_event['End']
-            results.append(mask_data)
-            results.append(event_data)
-            return results
+
+            character_mask_string = reference.get_dialog_character_mask(video_width, video_height, point_center)
+            character_mask_data = copy.deepcopy(event_data)
+            character_mask_data["Text"] = character_mask_string
+            character_mask_data["Style"] = 'screen'
+            character_mask_data['Layer'] = 1
+
+            character_dialog_data = copy.deepcopy(character_mask_data)
+            character_dialog_data["Text"] = \
+                rf"{{\pos(" \
+                rf"{point_center[0] + min([int(num) for num in character_mask_string.split(' ') if num.isdigit()])}," \
+                rf"{point_center[1]})" \
+                rf"\an4}}" + character_body
+            character_dialog_data["Style"] = 'character'
+            character_dialog_data['Layer'] = 2
+            #
+            # results.append(character_mask_data)
+            # results.append(character_dialog_data)
+            # results.append(mask_data)
+            # results.append(event_data)
+            return [character_mask_data], [character_dialog_data], [mask_data], [event_data]  # ,results
         else:
-            masks = []
-            dialogs = []
+            dialog_masks = []
+            dialog_events = []
+            character_masks = []
+            character_events = []
             frame_data = reference.get_frame_data((video_width, video_height), dialog_frames[0]['point_center'])
             for index, frame in enumerate(dialog_frames):
                 move = r"{\an7\pos(" \
@@ -706,22 +725,28 @@ class SekaiJsonVideoProcess:
                     dialog_body = ""
                 frame_body = move + dialog_body
                 event_data = {
-                    "Layer": 2,
+                    "Layer": 1,
                     "Start": tools.timedelta_to_string(frame_time * (frame['frame'] + offset_frame)),
                     "End": tools.timedelta_to_string(frame_time * (frame['frame'] + offset_frame + 1)),
                     "Style": style,
                     "Name": dialog_data['WindowDisplayName'] if dialog_data else "",
                     "MarginL": 0, "MarginR": 0, "MarginV": 0,
                     "Effect": '',
-                    "Text": frame_body  # move + trans + dialog_body.replace("\n", r"\N")
+                    "Text": frame_body
                 }
 
-                if dialogs and dialogs[-1]['Text'] == event_data["Text"]:
-                    ev = copy.deepcopy(dialogs[-1])
+                if dialog_events and dialog_events[-1]['Text'] == event_data["Text"]:
+                    ev = copy.deepcopy(dialog_events[-1])
                     ev["End"] = event_data["End"]
-                    dialogs[-1] = ev
+                    dialog_events[-1] = ev
                 else:
-                    dialogs.append(event_data)
+                    dialog_events.append(event_data)
+
+                character_data = copy.deepcopy(dialog_events[-1])
+                character_data["Text"] = character_body
+                character_data["Style"] = 'character'
+                character_data['Layer'] = 0
+                character_events.append(character_data)
 
                 pc_str = 'point_center'
                 mask_move = [(frame[pc_str][i] - start_frame[pc_str][i]) for i in range(len(frame[pc_str]))]
@@ -729,7 +754,7 @@ class SekaiJsonVideoProcess:
                 mask = reference.get_dialog_mask(frame_data, mask_move)
 
                 mask_data = {
-                    "Layer": 1,
+                    "Layer": 0,
                     "Start": tools.timedelta_to_string(frame_time * (frame['frame'] + offset_frame)),
                     "End": tools.timedelta_to_string(frame_time * (frame['frame'] + offset_frame + 1)),
                     "Style": 'screen',
@@ -738,12 +763,18 @@ class SekaiJsonVideoProcess:
                     "Text": mask
                 }
 
-                if masks and masks[-1]['Text'] == mask_data["Text"]:
-                    ev = copy.deepcopy(masks[-1])
+                if dialog_masks and dialog_masks[-1]['Text'] == mask_data["Text"]:
+                    ev = copy.deepcopy(dialog_masks[-1])
                     ev["End"] = mask_data["End"]
-                    masks[-1] = ev
+                    dialog_masks[-1] = ev
                 else:
-                    masks.append(mask_data)
+                    dialog_masks.append(mask_data)
+
+                character_mask = copy.deepcopy(dialog_masks[-1])
+                character_mask["Text"] = reference.get_dialog_character_mask(
+                    video_width, video_height, dialog_frames[0]['point_center'], mask_move
+                )
+                character_masks.append(character_mask)
 
             event_data = {
                 "Layer": 2, "Type": "Comment", "Style": style, "Effect": '',
@@ -752,12 +783,12 @@ class SekaiJsonVideoProcess:
                 "Name": dialog_data['WindowDisplayName'] if dialog_data else "",
                 "MarginL": 0, "MarginR": 0, "MarginV": 0, "Text": dialog_data["Body"] if dialog_data else ""
             }
-            dialogs.append(event_data)
+            dialog_events.append(event_data)
             mask_data = copy.deepcopy(event_data)
             mask_data["Text"] = reference.get_dialog_mask(frame_data)
             mask_data['Layer'] = 1
-            masks.append(mask_data)
-            return masks + dialogs
+            dialog_masks.append(mask_data)
+            return character_masks, character_events, dialog_masks, dialog_events
 
     def area_banner_make_sequence(self, frame_array: list[int], area_info: dict | None, area_mask, fps):
         events = []
@@ -824,38 +855,39 @@ class SekaiJsonVideoProcess:
         events_mask.append(mask_event_data)
         return events_mask + events_body
 
-    def make_staff_event(self,dialog_fontsize:int)->list[dict]:
+    def make_staff_event(self, dialog_fontsize: int) -> list[dict]:
         staff_event = []
         staff_style = []
+
         def make_body(data):
             string = ""
             staffs = {}
             if s := (data.get("prefix")).strip():
-                        string += f"{s}\n"
+                string += f"{s}\n"
             if s := (data.get("recorder")).strip():
-                        d = staffs.get(s) or []
-                        d.append("录制")
-                        staffs[s] = d
+                d = staffs.get(s) or []
+                d.append("录制")
+                staffs[s] = d
             if s := (data.get("translator")).strip():
-                        d = staffs.get(s) or []
-                        d.append("翻译")
-                        staffs[s] = d
+                d = staffs.get(s) or []
+                d.append("翻译")
+                staffs[s] = d
             if s := (data.get("translate_proof")).strip():
-                        d = staffs.get(s) or []
-                        d.append("翻校")
-                        staffs[s] = d
+                d = staffs.get(s) or []
+                d.append("翻校")
+                staffs[s] = d
             if s := (data.get("subtitle_maker")).strip():
-                        d = staffs.get(s) or []
-                        d.append("时轴")
-                        staffs[s] = d
+                d = staffs.get(s) or []
+                d.append("时轴")
+                staffs[s] = d
             if s := (data.get("subtitle_proof")).strip():
-                        d = staffs.get(s) or []
-                        d.append("轴校")
-                        staffs[s] = d
+                d = staffs.get(s) or []
+                d.append("轴校")
+                staffs[s] = d
             if s := (data.get("compositor")).strip():
-                        d = staffs.get(s) or []
-                        d.append("压制")
-                        staffs[s] = d
+                d = staffs.get(s) or []
+                d.append("压制")
+                staffs[s] = d
             sort = ["录制", "翻译", "翻校", "时轴", "轴校", "压制"]
             staff_pair = sorted(staffs.items(), key=lambda x: min([sort.index(s) for s in x[1]]))
             staff_string = "\n".join([f"{'&'.join(staff[1])}：{staff[0]}" for staff in staff_pair])
@@ -866,26 +898,27 @@ class SekaiJsonVideoProcess:
             string = string.strip().replace("\n", r"\N")
             fade_time = data.get("fade")
             fad_string = f"{{\\fad({fade_time[0]},{fade_time[0]})}}"
-            string = fad_string+string
+            string = fad_string + string
             return string
+
         for item in self.staff:
-            body= make_body(item)
-            style_name =f"Staff-{hashlib.md5(body.encode('utf8')).hexdigest()[:3]}" 
+            body = make_body(item)
+            style_name = f"Staff-{hashlib.md5(body.encode('utf8')).hexdigest()[:3]}"
             event = {
-                'Layer': 1, 'MarginL': 0, 'MarginR': 0, 'MarginV': 0,'Name': 'staff','Effect': '',
+                'Layer': 1, 'MarginL': 0, 'MarginR': 0, 'MarginV': 0, 'Name': 'staff', 'Effect': '',
                 'Start': '0:00:00.00', 'End': tools.timedelta_to_string(timedelta(seconds=item["duration"])),
                 'Style': style_name, 'Text': body
             }
             style = copy.deepcopy(staff_style_format)
             style['Name'] = style_name
-            style['Fontsize'] = int(item['fontsize']*(dialog_fontsize if item["fontsize_type"]== 'ratio' else 1))
+            style['Fontsize'] = int(item['fontsize'] * (dialog_fontsize if item["fontsize_type"] == 'ratio' else 1))
             style['Alignment'] = item['position']
-            style['MarginL']=item['margin_lr']
-            style['MarginR']=item['margin_lr']
+            style['MarginL'] = item['margin_lr']
+            style['MarginR'] = item['margin_lr']
             style["MarginV"] = item["margin_v"]
             staff_style.append(style)
             staff_event.append(event)
-        return staff_event,staff_style
+        return staff_event, staff_style
 
     def run(self):
         self.processing = True
@@ -897,7 +930,7 @@ class SekaiJsonVideoProcess:
             self.frame_process_total = self.duration[1] - self.duration[0] \
                 if self.duration else self.VideoCapture.get(cv2.CAP_PROP_FRAME_COUNT)
             self.frame_processed = 0
-            dialogs_events, dialog_styles, banner_events, tag_events = self.match()
+            dialogs_events, characters_events, dialog_styles, banner_events, tag_events = self.match()
         except KeyboardInterrupt:
             self.log("process", f"Process Terminated Prematurely By User,No File Changed")
         except Exception as e:
@@ -907,17 +940,18 @@ class SekaiJsonVideoProcess:
             video_height = self.VideoCapture.get(cv2.CAP_PROP_FRAME_HEIGHT)
             video_width = self.VideoCapture.get(cv2.CAP_PROP_FRAME_WIDTH)
 
-            staff_events,staff_style = self.make_staff_event(
-                [s for s in dialog_styles if s['Name']=='初音ミク'][0]['Fontsize']
-                )
-                
+            staff_events, staff_style = self.make_staff_event(
+                [s for s in dialog_styles if s['Name'] == '初音ミク'][0]['Fontsize']
+            )
+
             filename = os.path.splitext(os.path.split(self.video_file)[-1])[0]
             events = \
                 get_divider_event(f"{filename} - Made by SekaiSubtitle", 10) + \
                 get_divider_event("Staff Start") + staff_events + get_divider_event("Staff End") + \
                 get_divider_event("Banner Start") + banner_events + get_divider_event("Banner End") + \
                 get_divider_event("Tag Start") + tag_events + get_divider_event("Tag End") + \
-                get_divider_event("Dialog Start") + dialogs_events + get_divider_event("Dialog End")
+                get_divider_event("Dialog Start") + dialogs_events + get_divider_event("Dialog End") + \
+                get_divider_event("Character Start") + characters_events + get_divider_event("Character End")
             res = {
                 "ScriptInfo": {"PlayResX": video_width, "PlayResY": video_height},
                 "Garbage": {"video": self.video_file},

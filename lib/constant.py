@@ -74,6 +74,19 @@ template_style = {
 
 t = [
     {
+        "Name": "character",
+        "PrimaryColour": "&H00FFFFFF",
+        "SecondaryColour": "&H00FFFFFF",
+        "OutlineColour": "&H00000000",
+        "BackColour": "&H00FFFFFF",
+        "Alignment": 7,
+        "MarginL": 10,
+        "MarginR": 10,
+        "MarginV": 10,
+        "Outline": 0,
+        "Shadow": 0,
+    },
+    {
         "Name": "初音ミク",
         "PrimaryColour": "&H00BBCC33",
         "SecondaryColour": "&H000000FF",
@@ -288,7 +301,8 @@ t = [
         "MarginR": 15,
         "MarginV": 19,
         "Outline": 0,
-    }
+    },
+
 ]
 
 subtitle_styles_format = {}
