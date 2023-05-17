@@ -1,13 +1,6 @@
 # -*- coding: utf-8 -*-
-import datetime
-import json
 import os
 from typing import Union
-
-import ass
-from ass.data import Color
-
-from lib.tools import timedelta_to_string
 
 
 class Subtitle:
@@ -186,56 +179,6 @@ class Subtitle:
     def string(self):
         result = f"{self.info.string}\n{self.garbage.string}\n{self.styles.string}\n{self.events.string}"
         return result
-
-
-def from_file_generate(file_path: str) -> Subtitle:
-    if not os.path.exists(file_path):
-        raise FileNotFoundError
-
-    if os.path.splitext(file_path)[-1] == ".json":
-        data = json.load(open(file_path, 'r', encoding="utf8"))
-        return Subtitle(data)
-    else:
-        with open(file_path, 'r', encoding="utf-8-sig") as fp:
-            doc = ass.parse(fp)
-        styles = []
-        for style in doc.styles:
-            data = style.__dict__['fields']
-            result = {}
-            for key in data:
-                value = data.get(key)
-                if isinstance(value, Color):
-                    res = value.to_ass()
-                elif isinstance(value, bool):
-                    res = int(value)
-                else:
-                    res = value
-                result[key] = res
-            styles.append(result)
-        events = []
-        for event in doc.events:
-            data = event.__dict__['fields']
-            result = {}
-            for key in data:
-                value = data.get(key)
-                if isinstance(value, datetime.timedelta):
-                    res = timedelta_to_string(value)
-                elif isinstance(value, bool):
-                    res = int(value)
-                else:
-                    res = value
-                result[key] = res
-            events.append(result)
-        data = {
-            "ScriptInfo": {
-                key: doc.info.get(key)
-                for key in ["Title", "ScriptType", "ScaledBorderAndShadow", "PlayResX", "PlayResY"]
-            },
-            "Garbage": {},
-            "Styles": styles,
-            "Events": events
-        }
-        return Subtitle(data)
 
 
 class AssDraw:

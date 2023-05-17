@@ -143,7 +143,3 @@ def get_dialog_character_mask(w: int, h: int, point_center: list[int, int], move
 
     position = rf"\pos({point_center[0] + (move[0] if move else 0)},{point_center[1] + (move[1] if move else 0)})"
     return rf"{{\p1\c&H886667&{position}}}" + mask.string()
-
-# -353 + 32
-# -1172
-# l = 741.5 h = 95

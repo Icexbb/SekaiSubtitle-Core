@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import base64
-from typing import List
 
 import cv2
 import numpy as np
@@ -140,7 +139,7 @@ def check_frame_dialog_status(frame: np.ndarray, pointer: np.ndarray, point_cent
     return result
 
 
-def check_frame_area_mask(frame: np.ndarray, area_mask: List[int]):
+def check_frame_area_mask(frame: np.ndarray, area_mask: list[int]):
     check_size_y = abs(int((area_mask[1] - area_mask[0]) / 3))
     check_size_x = abs(int((area_mask[2] - area_mask[3]) / 2))
     cut1: np.ndarray = frame[area_mask[0]:area_mask[0] + check_size_y, area_mask[2]:area_mask[2] + check_size_x]
@@ -188,7 +187,6 @@ def check_frame_banner_edge(frame, area, temp):
     sz = int(cut.shape[1] * 0.3)
     cut = cv2.resize(cut, (sz, sz))
     cut[int(sz * 0.3):int(sz * 0.7), int(sz * 0.2):int(sz * 0.8)] = c
-    # cut = cv2.cvtColor(cut, cv2.COLOR_BGR2GRAY)
     temp_canny = cv2.Canny(temp, 100, 200)
     ca = 255 - temp
 
@@ -204,8 +202,4 @@ def check_frame_banner_edge(frame, area, temp):
     for t in [(50, 150), (25, 25), (50, 50)]:
         if match(t):
             return True
-    # edge = cv2.Canny(cut, 25, 25)
-    # res = cv2.matchTemplate(edge, temp, cv2.TM_CCORR_NORMED)[0][0]
-    # if res > 0.35:
-    #     return True
     return False

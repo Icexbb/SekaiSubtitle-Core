@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import signal
 from threading import Thread
 from typing import Literal
 
@@ -8,7 +9,6 @@ import cv2
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, WebSocketException
 from fastapi.middleware.cors import CORSMiddleware
-
 from lib import tools
 from lib.download import download_list, DownloadTask, DownloadConfig
 from lib.process import SekaiJsonVideoProcess, ProcessConfig
@@ -357,6 +357,41 @@ async def delete_download_task(task_id: str):
     except KeyError:
         raise HTTPException(
             400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
+
+
+@app.post('/download/move/{task_id}/to/{path}')
+async def delete_download_task(task_id: str, path: str):
+    try:
+        result = app.get_download_task(task_id).move(path)
+        return {"success": result}
+    except KeyError:
+        raise HTTPException(
+            400, {"success": False, "error": f"Task {task_id} Does Not Exists"})
+
+
+@app.websocket('/alive')
+async def ws_alive(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        timeout_count = 0
+        while True:
+            try:
+                recv = await asyncio.wait_for(websocket.receive_json(), 0.5)
+                timeout_count = 0
+            except asyncio.TimeoutError:
+                timeout_count += 1
+                await websocket.send_text(json.dumps({'type': "alive"}, ensure_ascii=False))
+                if timeout_count >= 30:
+                    break
+            except WebSocketDisconnect:
+                break
+            else:
+                if recv.get("type") == "alive":
+                    await websocket.send_text(json.dumps({'type': "alive"}, ensure_ascii=False))
+                else:
+                    break
+    finally:
+        os.kill(os.getpid(), signal.SIGINT)
 
 
 @app.on_event("shutdown")

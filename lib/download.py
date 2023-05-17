@@ -1,4 +1,5 @@
 import os
+import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Literal, Optional
 from urllib.parse import urlparse
@@ -275,8 +276,11 @@ class DownloadTask:
         self.dir = config.path or os.path.join(os.path.expanduser('~/Documents'), "SekaiSubtitle", "data", self.source)
         self.proxy = {"http://": config.proxy, "https://": config.proxy} if config.proxy else None
         self.timeout = config.timeout if config.timeout else None
-        self.fullpath = os.path.join(self.dir, self.filename)
         self.downloaded = False
+
+    @property
+    def fullpath(self):
+        return os.path.join(self.dir, self.filename)
 
     @property
     def data(self):
@@ -301,3 +305,15 @@ class DownloadTask:
             except Exception:
                 try_time += 1
         return False
+
+    def move(self, path):
+        if self.exist:
+            try:
+                shutil.move(self.fullpath, path)
+            except os.path.exists(os.path.join(path, self.filename)):
+                os.remove(self.fullpath)
+            finally:
+                self.dir = path
+                return True
+        else:
+            raise FileExistsError
