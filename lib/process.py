@@ -7,7 +7,7 @@ import re
 import time
 from concurrent import futures
 from datetime import timedelta
-from typing import Optional
+from typing import Optional, Any
 
 import cv2
 import numpy as np
@@ -580,20 +580,23 @@ class SekaiJsonVideoProcess:
         return res
 
     @staticmethod
-    def dialog_body_typer(body: str, char_interval: list[int, int] = [80, 50]):
+    def dialog_body_typer(body: str, char_interval: list[int, int] = [50, 80]):
         return_char = ["\n", "\\n", "\\N"]
         for c in return_char:
             body.replace(c, "\n")
         body_list = list(body)
         res = []
-        next_start = char_interval[1]
+        next_start = 0
+        fade_time = char_interval[0]
+        char_time = char_interval[1]
+
         for index, char in enumerate(body_list):
             if char_interval:
                 start = next_start + (300 if char == '\n' else 0)
-                end = start + char_interval[1]
+                end = start + fade_time
                 r = rf"{{\alphaFF\t({start},{end},1,\alpha0)}}" + (char if char != "\n" else r"\N")
                 res.append(r)
-                next_start = start + char_interval[0]
+                next_start = start + char_time
             else:
                 res.append(char if char != "\n" else r"\N")
 
@@ -601,7 +604,7 @@ class SekaiJsonVideoProcess:
 
     @staticmethod
     def dialog_body_typer_calculater(body: str, frame_count: int, frame_time: timedelta,
-                                     char_interval: list[int, int] = [80, 50]):
+                                     char_interval: list[int, int] = [50, 80]):
         return_char = ["\n", "\\n", "\\N"]
         for c in return_char:
             body.replace(c, "\n")
@@ -611,16 +614,20 @@ class SekaiJsonVideoProcess:
         is_trans_now = False
         body_list = list(body)
         res = []
-        char_time = 0
+        char_time_now = 0
+
+        fade_time = char_interval[0]
+        char_time = char_interval[1]
+
         for index, char in enumerate(body_list):
-            char_time += char_interval[0] + (300 if char == "\n" else 0)
+            char_time_now += char_time + (300 if char == "\n" else 0)
             n_char = char if char != "\n" else r"\N"
             add_trans = ""
-            if char_time < now_time_ms < char_time + char_interval[1]:
-                la = int((now_time_ms - char_time) / char_interval[1] * 255)
+            if char_time_now < now_time_ms < char_time_now + fade_time:
+                la = int((now_time_ms - char_time_now) / fade_time * 255)
                 la_string = rf"{{\alpha{la}}}"
                 add_trans = la_string
-            elif char_time > now_time_ms:
+            elif char_time_now > now_time_ms:
                 if not is_trans_now:
                     add_trans = trans_alpha_string
                     is_trans_now = True
@@ -640,7 +647,6 @@ class SekaiJsonVideoProcess:
         frame_time = timedelta(seconds=1 / fps)
         start_frame = dialog_frames[0]
         end_frame = dialog_frames[-1]
-        results = []
         if dialog_data:
             style = DISPLAY_NAME_STYLE[dialog_data['WindowDisplayName']] \
                 if dialog_data['WindowDisplayName'] in DISPLAY_NAME_STYLE else "関連人物"
@@ -683,9 +689,6 @@ class SekaiJsonVideoProcess:
                 prefix = r"{\fad(100,0)}"
                 mask_data["Start"] = tools.timedelta_to_string(frame_time * max(0, start_frame['frame'] - 6))
                 mask_data["Text"] = prefix + mask_data["Text"]
-            # if last_dialog_frame and last_dialog_event:
-            #     if start_frame['frame'] - last_dialog_frame['frame'] <= 5:
-            #         start_time = last_dialog_event['End']
 
             character_mask_string = reference.get_dialog_character_mask(video_width, video_height, point_center)
             character_mask_data = copy.deepcopy(event_data)
@@ -701,12 +704,11 @@ class SekaiJsonVideoProcess:
                 rf"\an4}}" + character_body
             character_dialog_data["Style"] = 'character'
             character_dialog_data['Layer'] = 2
-            #
-            # results.append(character_mask_data)
-            # results.append(character_dialog_data)
-            # results.append(mask_data)
-            # results.append(event_data)
-            return [character_mask_data], [character_dialog_data], [mask_data], [event_data]  # ,results
+            if self.video_only:
+                character_dialog_data["Type"] = "Comment"
+                character_mask_data["Type"] = "Comment"
+
+            return [character_mask_data], [character_dialog_data], [mask_data], [event_data]
         else:
             dialog_masks = []
             dialog_events = []
@@ -746,6 +748,8 @@ class SekaiJsonVideoProcess:
                 character_data["Text"] = character_body
                 character_data["Style"] = 'character'
                 character_data['Layer'] = 0
+                if self.video_only:
+                    character_data["Type"] = "Comment"
                 character_events.append(character_data)
 
                 pc_str = 'point_center'
@@ -774,6 +778,8 @@ class SekaiJsonVideoProcess:
                 character_mask["Text"] = reference.get_dialog_character_mask(
                     video_width, video_height, dialog_frames[0]['point_center'], mask_move
                 )
+                if self.video_only:
+                    character_mask["Type"] = "Comment"
                 character_masks.append(character_mask)
 
             event_data = {
@@ -855,7 +861,7 @@ class SekaiJsonVideoProcess:
         events_mask.append(mask_event_data)
         return events_mask + events_body
 
-    def make_staff_event(self, dialog_fontsize: int) -> list[dict]:
+    def make_staff_event(self, dialog_fontsize: int) -> tuple[list[dict[str, int | str | Any]], list[Any]]:
         staff_event = []
         staff_style = []
 
@@ -889,7 +895,7 @@ class SekaiJsonVideoProcess:
                 d.append("压制")
                 staffs[s] = d
             sort = ["录制", "翻译", "翻校", "时轴", "轴校", "压制"]
-            staff_pair = sorted(staffs.items(), key=lambda x: min([sort.index(s) for s in x[1]]))
+            staff_pair = sorted(staffs.items(), key=lambda x: min([sort.index(sx) for sx in x[1]]))
             staff_string = "\n".join([f"{'&'.join(staff[1])}：{staff[0]}" for staff in staff_pair])
             if staff_string:
                 string += f"{staff_string}\n"
