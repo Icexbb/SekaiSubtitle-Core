@@ -129,7 +129,8 @@ def get_area_tag_mask(frame_height: int, frame_width: int, move: tuple[int, int]
     return r"{\an7\p1\c&H674445&\pos(0,0)}" + mask.string(), (h, w)
 
 
-def get_dialog_character_mask(w: int, h: int, point_center: list[int, int], move: list[int, int] = None) -> str:
+def get_dialog_character_mask(w: int, h: int, point_center: list[int, int], point_size: int,
+                              move: list[int, int] = None) -> str:
     origin_mask = "m 385 1125 " \
                   "l 385 1220 " \
                   "l 1137 1220 " \
@@ -137,9 +138,9 @@ def get_dialog_character_mask(w: int, h: int, point_center: list[int, int], move
                   "b 1183 1134 1146 1125 1137 1125".strip()
 
     mask = AssDraw(origin_mask)
-    mask.move([-671, -1172])
+    mask.move([-385, -1172])
     mask.scale(get_pattern_size((w, h))['pattern_coefficient'] / get_pattern_size((2560, 1600))['pattern_coefficient'])
-    mask.move([320, 0])
+    mask.move([int(point_size / 2), 0])
 
-    position = rf"\pos({point_center[0] + (move[0] if move else 0)},{point_center[1] + (move[1] if move else 0)})"
+    position = rf"\pos({point_center[0]},{point_center[1]})"
     return rf"{{\p1\c&H886667&{position}}}" + mask.string()

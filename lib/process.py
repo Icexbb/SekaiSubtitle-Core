@@ -690,7 +690,8 @@ class SekaiJsonVideoProcess:
                 mask_data["Start"] = tools.timedelta_to_string(frame_time * max(0, start_frame['frame'] - 6))
                 mask_data["Text"] = prefix + mask_data["Text"]
 
-            character_mask_string = reference.get_dialog_character_mask(video_width, video_height, point_center)
+            character_mask_string = reference.get_dialog_character_mask(
+                video_width, video_height, point_center, point_size)
             character_mask_data = copy.deepcopy(event_data)
             character_mask_data["Text"] = character_mask_string
             character_mask_data["Style"] = 'screen'
@@ -776,7 +777,7 @@ class SekaiJsonVideoProcess:
 
                 character_mask = copy.deepcopy(dialog_masks[-1])
                 character_mask["Text"] = reference.get_dialog_character_mask(
-                    video_width, video_height, dialog_frames[0]['point_center'], mask_move
+                    video_width, video_height, dialog_frames[0]['point_center'], point_size, mask_move
                 )
                 if self.video_only:
                     character_mask["Type"] = "Comment"
