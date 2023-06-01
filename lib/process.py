@@ -869,29 +869,29 @@ class SekaiJsonVideoProcess:
         def make_body(data):
             string = ""
             staffs = {}
-            if s := (data.get("prefix")).strip():
+            if s := (data.get("prefix") or "").strip():
                 string += f"{s}\n"
-            if s := (data.get("recorder")).strip():
+            if s := (data.get("recorder") or "").strip():
                 d = staffs.get(s) or []
                 d.append("录制")
                 staffs[s] = d
-            if s := (data.get("translator")).strip():
+            if s := (data.get("translator") or "").strip():
                 d = staffs.get(s) or []
                 d.append("翻译")
                 staffs[s] = d
-            if s := (data.get("translate_proof")).strip():
+            if s := (data.get("translate_proof") or "").strip():
                 d = staffs.get(s) or []
                 d.append("翻校")
                 staffs[s] = d
-            if s := (data.get("subtitle_maker")).strip():
+            if s := (data.get("subtitle_maker") or "").strip():
                 d = staffs.get(s) or []
                 d.append("时轴")
                 staffs[s] = d
-            if s := (data.get("subtitle_proof")).strip():
+            if s := (data.get("subtitle_proof") or "").strip():
                 d = staffs.get(s) or []
                 d.append("轴校")
                 staffs[s] = d
-            if s := (data.get("compositor")).strip():
+            if s := (data.get("compositor") or "").strip():
                 d = staffs.get(s) or []
                 d.append("压制")
                 staffs[s] = d
